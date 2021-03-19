@@ -40,9 +40,12 @@ const char * const vertexSource = R"(
 
 	uniform mat4 MVP;			// uniform variable, the Model-View-Projection transformation matrix
 	layout(location = 0) in vec3 vp;	// Varying input: vp = vertex position is expected in attrib array 0
+    layout(location = 1) in vec2 uv;
 
+    out vec2 nodeTextCoord;
 
 	void main() {
+        nodeTextCoord = uv;
 		gl_Position = vec4(vp.x, vp.y, 0, vp.z) * MVP;		// transform vp from modeling space to normalized device space
 	}
 )";
@@ -60,19 +63,36 @@ const char * const fragmentSource = R"(
 	}
 )";
 
-GPUProgram gpuProgram; // vertex and fragment shaders
+const char * const fragmantNode = R"(
+    #version 330			// Shader 3.3
+    precision highp float;	// normal floats, makes no difference on desktop computers
+
+    uniform sampler2D textureUnit;
+    in vec2 nodeTextCoord;
+
+    out vec4 outColor;		// computed color of the current pixel
+
+    void main() {
+        outColor = texture(textureUnit, nodeTextCoord);	// computed color is the color of the primitive
+    }
+)";
+
+GPUProgram gpuProgramLine; // vertex and fragment shaders
+GPUProgram gpuProgramNode;
+
 static const int nv = 100;
 
 class Node {
     unsigned int vaoNode, vboNode;
-    unsigned int vaoNodeSmall, vboNodeSmall;
+    unsigned int vboTexture;
+    Texture * texture;
     vec2 wPoints;
     vec3 color1;
     vec3 color2;
 public:
     Node(vec2 pos) : wPoints(pos){
         vec3 vertices[nv];
-        vec3 verticesSmall[nv];
+        vec2 uvVerticices[nv];
         glGenVertexArrays(1, &vaoNode);
         glBindVertexArray(vaoNode);
         glGenBuffers(1, &vboNode);
@@ -80,28 +100,25 @@ public:
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0,3, GL_FLOAT, GL_FALSE,3 * sizeof(float), NULL);
 
-        glGenVertexArrays(1, &vaoNodeSmall);
-        glBindVertexArray(vaoNodeSmall);
-        glGenBuffers(1, &vboNodeSmall);
-        glBindBuffer(GL_ARRAY_BUFFER, vboNodeSmall);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0,3, GL_FLOAT, GL_FALSE,3 * sizeof(float), NULL);
+        glGenBuffers(1, &vboTexture);
+        glBindBuffer(GL_ARRAY_BUFFER, vboTexture);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1,2,GL_FLOAT, GL_FALSE, 0, NULL);
 
         for (int j = 0; j < nv; j++) {
             float fi = j * 2 * M_PI / nv;
 
             vec2 tmp = {cosf(fi) * 0.05f + wPoints.x, sinf(fi) * 0.05f + wPoints.y};
             vertices[j] = TransformHyperbola(tmp);
-
-            tmp = {cosf(fi) * (0.05f / 2) + wPoints.x, sinf(fi) * (0.05f / 2) + wPoints.y};
-            verticesSmall[j] = TransformHyperbola(tmp);
+            uvVerticices[j] = vec2(0.5f + 1.0f * cosf(fi), 0.5f + 1.0f * sinf(fi));
         }
+        RandomColor();
+        genTex(color1,color2);
 
         glBindBuffer(GL_ARRAY_BUFFER, vboNode);
         glBufferData(GL_ARRAY_BUFFER, nv * sizeof(vec3), vertices, GL_STATIC_DRAW);
-        glBindBuffer(GL_ARRAY_BUFFER, vboNodeSmall);
-        glBufferData(GL_ARRAY_BUFFER, nv * sizeof(vec3), verticesSmall, GL_STATIC_DRAW);
-
+        glBindBuffer(GL_ARRAY_BUFFER, vboTexture);
+        glBufferData(GL_ARRAY_BUFFER, nv * sizeof(vec2), uvVerticices, GL_STATIC_DRAW);
     }
 
     vec3 GetwPonts(){
@@ -121,19 +138,43 @@ public:
     void RandomColor(){
         color1 = {RandomNumber(0,1), RandomNumber(0,1), RandomNumber(0,1)};
         color2 = {RandomNumber(0,1), RandomNumber(0,1), RandomNumber(0,1)};
-        if (dot(color1,color2) < 0.03f) RandomColor();
+        if (length(color1 - color2) < 0.3f) RandomColor();
+    }
+
+    void genTex(vec3 color1, vec3 color2){
+        std::vector<vec4> textureColor;
+        for (int i = 0; i < 50; i++)
+            for (int j = 0; j < 50; j++){
+                float x = (float)i / 50.0f;
+                float y = (float)j / 50.0f;
+                if (x <= 0.5 and y <= 0.5 or x >= 0.5 and y <= 0.5)
+                    textureColor.emplace_back(color1.x,color1.y,color1.z, 1);
+
+                if (x >= 0.5 and y >= 0.5 or x <= 0.5 and y <= 0.5)
+                    textureColor.push_back(vec4(color2.x,color2.y,color2.z, 1));
+
+
+
+//                if (powf(x - 0.5f,2) + powf(y - 0.5, 2) <= 0.1f)
+//                    textureColor.push_back(vec4(color1.x,color1.y,color1.z, 1));
+//                else
+//                    textureColor.push_back(vec4(color2.x,color2.y,color2.z, 1));
+            }
+        texture = new Texture(50,50,textureColor);
     }
 
     void Draw(){
-        RandomColor();
+        mat4 VPTransform = {1,0,0,0,
+                            0,1,0,0,
+                            0,0,1,0,
+                            0,0,0,1};
+        gpuProgramNode.Use();
+        gpuProgramNode.setUniform(VPTransform, "MVP");
+        gpuProgramNode.setUniform(*texture, "textureUnit");
 
-        gpuProgram.setUniform(color1, "color");
         glBindVertexArray(vaoNode);
         glDrawArrays(GL_TRIANGLE_FAN, 0, nv);
 
-        gpuProgram.setUniform(color2, "color");
-        glBindVertexArray(vaoNodeSmall);
-        glDrawArrays(GL_TRIANGLE_FAN, 0, nv);
     }
 };
 
@@ -158,10 +199,11 @@ public:
                             0,1,0,0,
                             0,0,1,0,
                             0,0,0,1};
-        gpuProgram.setUniform(VPTransform, "MVP");
+        gpuProgramLine.Use();
+        gpuProgramLine.setUniform(VPTransform, "MVP");
 
         glBindBuffer(GL_ARRAY_BUFFER, vboLine);
-        gpuProgram.setUniform(vec3(1, 0, 0), "color");
+        gpuProgramLine.setUniform(vec3(1, 0, 0), "color");
         for (int i = 0; i < rEdges.size(); i++) {
             std::vector<vec3> tmp;
             tmp.push_back(wPoints[rEdges[i].x].GetwPonts());
@@ -191,7 +233,6 @@ public:
                    if (length(tmpNodes[j] - tmp) < 0.15f){
                        isClose = true;
                        break;
-
                    }
                }
            }
@@ -231,7 +272,7 @@ public:
 };
 
 Graph * graph;
-unsigned int vao;
+
 // Initialization, create an OpenGL context
 void onInitialization() {
    // srand(time(NULL));
@@ -240,16 +281,17 @@ void onInitialization() {
     glLineWidth(2.0f);
 
     // create program for the GPU
-    gpuProgram.create(vertexSource, fragmentSource, "outColor");
+    gpuProgramLine.create(vertexSource, fragmentSource, "outColor");
+    gpuProgramNode.create(vertexSource, fragmantNode, "outColor");
 }
 
 // Window has become invalid: Redraw
 void onDisplay() {
-glClearColor(0, 0, 0, 0);     // background color
-glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); // clear frame buffer
+    glClearColor(0, 0, 0, 0);     // background color
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); // clear frame buffer
 
-graph->Draw();
-glutSwapBuffers(); // exchange buffers for double buffering
+    graph->Draw();
+    glutSwapBuffers(); // exchange buffers for double buffering
 }
 
 // Key of ASCII code pressed
@@ -267,23 +309,20 @@ void onKeyboardUp(unsigned char key, int pX, int pY) {
 
 // Move mouse with key pressed
 void onMouseMotion(int pX, int pY) {	// pX, pY are the pixel coordinates of the cursor in the coordinate system of the operation system
-// Convert to normalized device space
-float cX = 2.0f * pX / windowWidth - 1;	// flip y axis
-float cY = 1.0f - 2.0f * pY / windowHeight;
-//printf("Mouse moved to (%3.2f, %3.2f)\n", cX, cY);
+
 }
 
 // Mouse click event
 void onMouse(int button, int state, int pX, int pY) { // pX, pY are the pixel coordinates of the cursor in the coordinate system of the operation system
 
-if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN) {
-   float cx = 2.0f * pX / windowWidth - 1;
-   float cy = 1.0f - 2.0 * pY / windowHeight;
-   glutPostRedisplay();
-}
+    if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN) {
+       float cx = 2.0f * pX / windowWidth - 1;
+       float cy = 1.0f - 2.0 * pY / windowHeight;
+       glutPostRedisplay();
+    }
 }
 
 // Idle event indicating that some time elapsed: do animation here
 void onIdle() {
-long time = glutGet(GLUT_ELAPSED_TIME); // elapsed time since the start of the program
+    long time = glutGet(GLUT_ELAPSED_TIME); // elapsed time since the start of the program
 }
