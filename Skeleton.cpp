@@ -39,14 +39,38 @@ const char * const vertexSource = R"(
 	precision highp float;		// normal floats, makes no difference on desktop computers
 
 	uniform mat4 MVP;			// uniform variable, the Model-View-Projection transformation matrix
+    uniform vec3 m1;
+    uniform vec3 m2;
+    uniform float d;
 	layout(location = 0) in vec3 vp;	// Varying input: vp = vertex position is expected in attrib array 0
     layout(location = 1) in vec2 uv;
 
     out vec2 nodeTextCoord;
 
+    float Lorentz(vec3 p1, vec3 p2){
+        return dot(vec2(p1.x,p1.y), vec2(p2.x, p2.y)) - p1.z * p2.z;
+    }
+
+    float distance(vec3 p1, vec3 p2){
+        return acosh(-Lorentz(p1,p2));
+    }
+
+    vec3 mirror(vec3 p1, vec3 n){
+        float d = distance(p1, n);
+        vec3 v = (n - p1 * cosh(d));
+        return p1 * cosh(2.0f * d) + v * 2.0f * cosh(d);
+    }
+
 	void main() {
         nodeTextCoord = uv;
-		gl_Position = vec4(vp.x, vp.y, 0, vp.z) * MVP;		// transform vp from modeling space to normalized device space
+        vec3 mirorVP;
+        if (sinh(d) == 0){
+            mirorVP = vp;
+        } else {
+            mirorVP = mirror(mirror(vp, m1),m2);
+        }
+
+		gl_Position = vec4(mirorVP.x, mirorVP.y, 0, mirorVP.z);		// transform vp from modeling space to normalized device space
 	}
 )";
 
@@ -80,19 +104,39 @@ const char * const fragmantNode = R"(
 GPUProgram gpuProgramLine; // vertex and fragment shaders
 GPUProgram gpuProgramNode;
 
+float d = 0.01f;
+float dis = 0;
+bool pressed = false;
 static const int nv = 100;
+vec3 m1, m2;
+
+float Lorentz(vec3 p1, vec3 p2){
+    return dot(vec2(p1.x,p1.y), vec2(p2.x, p2.y)) - p1.z * p2.z;
+}
+
+float distance(vec3 p1, vec3 p2){
+    return acoshf(-Lorentz(p1,p2));
+}
+
+vec3 mirror(vec3 p1, vec3 n){
+    float d = distance(p1, n);
+    vec3 v = (n - p1 * coshf(d));
+    return p1 * cosh(2.0f * d) + v * 2.0f * coshf(d);
+}
 
 class Node {
     unsigned int vaoNode, vboNode;
     unsigned int vboTexture;
     Texture * texture;
     vec2 wPoints;
+    vec3 hPoint;
     vec3 color1;
     vec3 color2;
+    vec3 vertices[nv];
 public:
     Node(vec2 pos) : wPoints(pos){
-        vec3 vertices[nv];
         vec2 uvVerticices[nv];
+        hPoint = TransformToHyperbola(wPoints);
         glGenVertexArrays(1, &vaoNode);
         glBindVertexArray(vaoNode);
         glGenBuffers(1, &vboNode);
@@ -107,28 +151,53 @@ public:
 
         for (int j = 0; j < nv; j++) {
             float fi = j * 2 * M_PI / nv;
-
-            vec2 tmp = {cosf(fi) * 0.05f + wPoints.x, sinf(fi) * 0.05f + wPoints.y};
-            vertices[j] = TransformHyperbola(tmp);
+            vertices[j] = TransformToHyperbola({cosf(fi) * 0.05f, sinf(fi) * 0.05f});
             uvVerticices[j] = vec2(0.5f + 1.0f * cosf(fi), 0.5f + 1.0f * sinf(fi));
         }
+
+        vec3 nPos = GetwPonts();
+        vec3 origo = {0,0,1};
+        float dis = distance(origo, nPos);
+        if (sinhf(dis) != 0){
+            vec3 vPont = (nPos - origo * coshf(dis)) / sinhf(dis);
+            vec3 m1 = origo * coshf(dis / 4.0f) + vPont * sinhf(dis / 4.0f);
+            vec3 m2 = origo * coshf((3.0f * dis) / 4.0f) + vPont * sinhf((dis * 3.0f) / 4.0f);
+
+            for (int i = 0; i < nv; i++){
+                vertices[i] = mirror(mirror(vertices[i], m1), m2);
+            }
+        }
+
         RandomColor();
         genTex(color1,color2);
 
         glBindBuffer(GL_ARRAY_BUFFER, vboNode);
-        glBufferData(GL_ARRAY_BUFFER, nv * sizeof(vec3), vertices, GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, nv * sizeof(vec3), vertices, GL_DYNAMIC_DRAW);
         glBindBuffer(GL_ARRAY_BUFFER, vboTexture);
-        glBufferData(GL_ARRAY_BUFFER, nv * sizeof(vec2), uvVerticices, GL_STATIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, nv * sizeof(vec2), uvVerticices, GL_DYNAMIC_DRAW);
+
     }
 
     vec3 GetwPonts(){
-        return TransformHyperbola(wPoints);
+        return hPoint;
     }
 
-    vec3 TransformHyperbola(vec2 pont){
+    vec3 TransformToHyperbola(vec2 pont){
         float d = sqrtf(powf(pont.x, 2) + powf(pont.y, 2) + 0);
         vec3 p = {(pont.x / d) * sinhf(d), (pont.y / d) * sinhf(d), coshf(d)};
         return p;
+    }
+
+    void TransformOnHyperbola(){
+
+        for (int i = 0; i < nv; i++){
+            vertices[i] = mirror(mirror(vertices[i], m1), m2);
+        }
+        hPoint = mirror(mirror(hPoint, m1), m2);
+            printf("m1 = %f\n",m1.x),
+        glBindVertexArray(vaoNode);
+        glBindBuffer(GL_ARRAY_BUFFER, vboNode);
+        glBufferData(GL_ARRAY_BUFFER, nv * sizeof(vec3), vertices, GL_DYNAMIC_DRAW);
     }
 
     float RandomNumber(float Min, float Max) {
@@ -164,12 +233,8 @@ public:
     }
 
     void Draw(){
-        mat4 VPTransform = {1,0,0,0,
-                            0,1,0,0,
-                            0,0,1,0,
-                            0,0,0,1};
+
         gpuProgramNode.Use();
-        gpuProgramNode.setUniform(VPTransform, "MVP");
         gpuProgramNode.setUniform(*texture, "textureUnit");
 
         glBindVertexArray(vaoNode);
@@ -195,12 +260,11 @@ public:
     }
 
     void Draw(){
-        mat4 VPTransform = {1,0,0,0,
-                            0,1,0,0,
-                            0,0,1,0,
-                            0,0,0,1};
+
         gpuProgramLine.Use();
-        gpuProgramLine.setUniform(VPTransform, "MVP");
+        gpuProgramLine.setUniform(m1, "m1");
+        gpuProgramLine.setUniform(m2, "m2");
+        gpuProgramLine.setUniform(dis, "d");
 
         glBindBuffer(GL_ARRAY_BUFFER, vboLine);
         gpuProgramLine.setUniform(vec3(1, 0, 0), "color");
@@ -212,8 +276,11 @@ public:
             glBindVertexArray(vaoLine);
             glDrawArrays(GL_LINE_STRIP, 0, tmp.size());
         }
-
-        for (auto node : wPoints){
+        gpuProgramNode.Use();
+        gpuProgramNode.setUniform(m1, "m1");
+        gpuProgramNode.setUniform(m2, "m2");
+        gpuProgramNode.setUniform(dis, "d");
+        for (auto & node : wPoints){
             node.Draw();
         }
     }
@@ -269,9 +336,18 @@ public:
        }
        printf("%d\n",rEdges.size());
     }
+
+    void TransformPosition(){
+        printf("m1 graf = %f\n",m1.x);
+        for (auto & var : wPoints){
+            var.TransformOnHyperbola();
+        }
+    }
 };
 
 Graph * graph;
+vec3 startPos;
+vec3 currentPos;
 
 // Initialization, create an OpenGL context
 void onInitialization() {
@@ -296,11 +372,16 @@ void onDisplay() {
 
 // Key of ASCII code pressed
 void onKeyboard(unsigned char key, int pX, int pY) {
-if (key == ' '){
-   graph->SetRandomPoints(50);
-   graph->RandomEdges();
-   glutPostRedisplay();
-}         // if d, invalidate display, i.e. redraw
+    if (key == ' '){
+       graph->SetRandomPoints(50);
+       graph->RandomEdges();
+       glutPostRedisplay();
+    }         // if d, invalidate display, i.e. redraw
+
+//    if (key == 'a'){
+//        d += 0.01f;
+//
+//    }
 }
 
 // Key of ASCII code released
@@ -309,20 +390,55 @@ void onKeyboardUp(unsigned char key, int pX, int pY) {
 
 // Move mouse with key pressed
 void onMouseMotion(int pX, int pY) {	// pX, pY are the pixel coordinates of the cursor in the coordinate system of the operation system
-
+    if (pressed) {
+        float cX = 2.0f * pX / windowWidth - 1;    // flip y axis
+        float cY = 1.0f - 2.0f * pY / windowHeight;
+        vec3 hPos = vec3(cX, cY, 1) / sqrtf(1 - powf(cX, 2) - powf(cY, 2));
+        currentPos = hPos;
+        dis = distance(startPos, currentPos);
+        if (sinhf(dis) != 0) {
+            vec3 vPont = (currentPos - startPos * coshf(dis)) / sinhf(dis);
+            m1 = startPos * coshf(dis / 4.0f) + vPont * sinhf(dis / 4.0f);
+            m2 = startPos * coshf((3.0f * dis) / 4.0f) + vPont * sinhf((dis * 3.0f) / 4.0f);
+        }
+        glutPostRedisplay();
+    }
 }
 
 // Mouse click event
 void onMouse(int button, int state, int pX, int pY) { // pX, pY are the pixel coordinates of the cursor in the coordinate system of the operation system
 
-    if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN) {
-       float cx = 2.0f * pX / windowWidth - 1;
-       float cy = 1.0f - 2.0 * pY / windowHeight;
+    if (button == GLUT_RIGHT_BUTTON && state == GLUT_DOWN) {
+        float cX = 2.0f * pX / windowWidth - 1;	// flip y axis
+        float cY = 1.0f - 2.0f * pY / windowHeight;
+        vec3 hPos = vec3(cX, cY, 1) / sqrtf(1-powf(cX,2)-powf(cY,2));
+        startPos = hPos;
+        currentPos = hPos;
        glutPostRedisplay();
+       pressed = true;
+    }
+
+    if (button == GLUT_RIGHT_BUTTON && state == GLUT_UP) {
+        float cX = 2.0f * pX / windowWidth - 1;	// flip y axis
+        float cY = 1.0f - 2.0f * pY / windowHeight;
+        vec3 hPos = vec3(cX, cY, 1) / sqrtf(1-powf(cX,2)-powf(cY,2));
+        dis = distance(startPos, currentPos);
+        if (sinhf(dis) != 0) {
+            vec3 vPont = (currentPos - startPos * coshf(dis)) / sinhf(dis);
+            m1 = startPos * coshf(dis / 4.0f) + vPont * sinhf(dis / 4.0f);
+            m2 = startPos * coshf((3.0f * dis) / 4.0f) + vPont * sinhf((dis * 3.0f) / 4.0f);
+            printf("m1 trans = %f\n",m1.x);
+            graph->TransformPosition();
+
+
+        }
+        dis=0;
+        glutPostRedisplay();
+        pressed = false;
     }
 }
 
 // Idle event indicating that some time elapsed: do animation here
 void onIdle() {
-    long time = glutGet(GLUT_ELAPSED_TIME); // elapsed time since the start of the program
+
 }
