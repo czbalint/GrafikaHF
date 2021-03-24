@@ -104,11 +104,11 @@ const char * const fragmantNode = R"(
 GPUProgram gpuProgramLine; // vertex and fragment shaders
 GPUProgram gpuProgramNode;
 
-float d = 0.01f;
 float dis = 0;
 bool pressed = false;
 static const int nv = 100;
 vec3 m1, m2;
+vec3 prob;
 
 float Lorentz(vec3 p1, vec3 p2){
     return dot(vec2(p1.x,p1.y), vec2(p2.x, p2.y)) - p1.z * p2.z;
@@ -128,15 +128,15 @@ class Node {
     unsigned int vaoNode, vboNode;
     unsigned int vboTexture;
     Texture * texture;
-    vec2 wPoints;
     vec3 hPoint;
     vec3 color1;
     vec3 color2;
     vec3 vertices[nv];
+    int cluster;
+    float minDis;
 public:
-    Node(vec2 pos) : wPoints(pos){
+    Node(vec2 pos) : cluster(-1), minDis(__DBL_MAX__), hPoint(TransformToHyperbola(pos)){
         vec2 uvVerticices[nv];
-        hPoint = TransformToHyperbola(wPoints);
         glGenVertexArrays(1, &vaoNode);
         glBindVertexArray(vaoNode);
         glGenBuffers(1, &vboNode);
@@ -194,7 +194,19 @@ public:
             vertices[i] = mirror(mirror(vertices[i], m1), m2);
         }
         hPoint = mirror(mirror(hPoint, m1), m2);
-            printf("m1 = %f\n",m1.x),
+            printf("aaa\n"),
+        glBindVertexArray(vaoNode);
+        glBindBuffer(GL_ARRAY_BUFFER, vboNode);
+        glBufferData(GL_ARRAY_BUFFER, nv * sizeof(vec3), vertices, GL_DYNAMIC_DRAW);
+    }
+
+    void TransformOnHyperbola(vec3 m1m, vec3 m2m){
+
+        for (int i = 0; i < nv; i++){
+            vertices[i] = mirror(mirror(vertices[i], m1m), m2m);
+        }
+        hPoint = mirror(mirror(hPoint, m1m), m2m);
+        //printf("m1 = %f\n",m1.x),
         glBindVertexArray(vaoNode);
         glBindBuffer(GL_ARRAY_BUFFER, vboNode);
         glBufferData(GL_ARRAY_BUFFER, nv * sizeof(vec3), vertices, GL_DYNAMIC_DRAW);
@@ -231,6 +243,12 @@ public:
             }
         texture = new Texture(50,50,textureColor);
     }
+
+    int getCluster(){ return cluster; }
+    void setCluster(int cluster) { this->cluster = cluster; }
+
+    float getMinDis(){ return minDis; }
+    void setMinDis(float dist) { this->minDis = dist; }
 
     void Draw(){
 
@@ -294,7 +312,7 @@ public:
            bool isClose = true;
            while (isClose)
            {
-               tmp = {RandomNumber(-1,1),RandomNumber(-1,1)};
+               tmp = {RandomNumber(-1.0,1.0),RandomNumber(-1.0,1.0)};
                isClose = false;
                for (int j = 0; j < tmpNodes.size(); ++j) {
                    if (length(tmpNodes[j] - tmp) < 0.15f){
@@ -338,9 +356,118 @@ public:
     }
 
     void TransformPosition(){
-        printf("m1 graf = %f\n",m1.x);
+       // printf("m1 graf = %f\n",m1.x);
         for (auto & var : wPoints){
             var.TransformOnHyperbola();
+        }
+    }
+
+    bool HasEdge(vec3 p1, vec3 p2){
+        for (const auto &item : rEdges) {
+            if (((wPoints[item.x].GetwPonts().x == p1.x && wPoints[item.x].GetwPonts().y == p1.y) &&
+                (wPoints[item.y].GetwPonts().x == p2.x && wPoints[item.y].GetwPonts().y == p2.y)) ||
+                ((wPoints[item.y].GetwPonts().x == p1.x && wPoints[item.y].GetwPonts().y == p1.y) &&
+                 (wPoints[item.x].GetwPonts().x == p2.x && wPoints[item.x].GetwPonts().y == p2.y)))
+                return true;
+        }
+        return false;
+    }
+
+    void kMeansClustering(int iterNum, int k){
+
+        for (int j = 0; j < iterNum; j++) {
+            //srand(time(NULL));
+            int clusterId = -1;
+            //init the clusters
+            std::vector<Node*> centroids;
+            for (int i = 0; i < k; i++) {
+                Node *tmp;
+                tmp = &wPoints.at(random() % wPoints.size());
+                centroids.push_back(tmp);
+            }
+
+            //assigning the point to a cluster
+            clusterId = -1;
+            for (int i = 0; i < centroids.size(); i++) {
+                Node* iterCen = centroids.at(i);
+                clusterId++;
+
+                for (std::vector<Node>::iterator iterNode = wPoints.begin(); iterNode != wPoints.end(); iterNode++) {
+                    Node tmp = *iterNode;
+                    float d = distance(iterCen->GetwPonts(), tmp.GetwPonts());
+                    if (d < tmp.getMinDis()) {
+                       if (!HasEdge(tmp.GetwPonts(), iterCen->GetwPonts())) {
+                            tmp.setMinDis(d);
+                            tmp.setCluster(clusterId);
+                       }
+                    }
+                    *iterNode = tmp;
+                }
+                //centroids[i] = iterCen;
+            }
+
+            //compute new centroids
+            std::vector<int> nPoints;
+            std::vector<float> sumX, sumY, sumZ;
+            //std::vector<vec3> sumVec;
+
+            for (int i = 0; i < k; i++) {
+                nPoints.push_back(0);
+                sumX.push_back(0);
+                sumY.push_back(0);
+                sumZ.push_back(0);
+                //sumVec.push_back({0,0,0});
+            }
+            for (std::vector<Node>::iterator iter = wPoints.begin(); iter != wPoints.end(); iter++) {
+                int clusterID = iter->getCluster();
+                if (clusterID != -1) {
+                    if (HasEdge(iter->GetwPonts(), centroids[clusterID]->GetwPonts())) {
+                        nPoints[clusterID]++;
+                        vec3 tmpPont = iter->GetwPonts();
+                        sumX[clusterID] += tmpPont.x;
+                        sumY[clusterID] += tmpPont.y;
+                        //sumZ[clusterID] -= tmpPont.z;
+                        //sumVec[clusterID] = Lorentz(sumVec[clusterID],tmpPont);
+                        iter->setMinDis(__DBL_MAX__);
+                    }
+                    else {
+                        nPoints[clusterID]--;
+                        vec3 tmpPont = iter->GetwPonts();
+                        sumX[clusterID] -= tmpPont.x;
+                        sumY[clusterID] -= tmpPont.y;
+                       // sumZ[clusterID] += tmpPont.z;
+                        //sumVec[clusterID] = Lorentz(sumVec[clusterID],tmpPont);
+                        iter->setMinDis(__DBL_MAX__);
+                    }
+                }
+            }
+            clusterId = -1;
+            for (int i = 0; i < centroids.size(); i++) {
+                Node *iterCen = centroids.at(i);
+                clusterId++;
+                if (nPoints[clusterId] != 0) {
+                    vec3 newPos;
+                    newPos.x = sumX[clusterId] / nPoints[clusterId];
+                    newPos.y = sumY[clusterId] / nPoints[clusterId];
+                   // newPos.z = sumZ[clusterId] / nPoints[clusterId];
+                    float gy = 1 + powf(newPos.x, 2) + powf(newPos.y, 2);
+                    if (gy > 0) {
+                        newPos.z = sqrtf(gy);
+                        // prob = newPos;
+                        // newPos = sumVec[clusterId] / nPoints[clusterId];
+                        printf("%f \n", powf(newPos.x, 2) + powf(newPos.y, 2) - powf(newPos.z, 2));
+                        float disc = distance(iterCen->GetwPonts(), newPos);
+                        if (sinhf(disc) != 0) {
+                            vec3 vPont = (newPos - iterCen->GetwPonts() * coshf(disc)) / sinhf(disc);
+                            vec3 m1m = iterCen->GetwPonts() * coshf(disc / 4.0f) + vPont * sinhf(disc / 4.0f);
+                            vec3 m2m = iterCen->GetwPonts() * coshf((3.0f * disc) / 4.0f) + vPont * sinhf((disc * 3.0f) / 4.0f);
+                            iterCen->TransformOnHyperbola(m1m, m2m);
+                        }
+                    }
+                    centroids[i] = iterCen;
+                    //glutPostRedisplay();
+                }
+            }
         }
     }
 };
@@ -367,21 +494,30 @@ void onDisplay() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT); // clear frame buffer
 
     graph->Draw();
+//    unsigned int vao, vbo;
+//    glPointSize(10.0f);
+//    glGenVertexArrays(1, &vao);
+//    glBindVertexArray(vao);
+//    glGenBuffers(1, &vbo);
+//    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+//    glEnableVertexAttribArray(0);
+//    glVertexAttribPointer(0,3, GL_FLOAT, GL_FALSE,3 * sizeof(float), NULL);
+//    glBufferData(GL_ARRAY_BUFFER,sizeof(vec3), &prob, GL_DYNAMIC_DRAW);
+//    glDrawArrays(GL_POINTS,0,3);
+
     glutSwapBuffers(); // exchange buffers for double buffering
 }
 
 // Key of ASCII code pressed
 void onKeyboard(unsigned char key, int pX, int pY) {
     if (key == ' '){
-       graph->SetRandomPoints(50);
-       graph->RandomEdges();
+       //graph->SetRandomPoints(50);
+       //graph->RandomEdges();
+       //for (int i = 0 ; i< 10;++i)
+       graph->kMeansClustering(10, 15);
        glutPostRedisplay();
-    }         // if d, invalidate display, i.e. redraw
 
-//    if (key == 'a'){
-//        d += 0.01f;
-//
-//    }
+    }
 }
 
 // Key of ASCII code released
@@ -427,7 +563,7 @@ void onMouse(int button, int state, int pX, int pY) { // pX, pY are the pixel co
             vec3 vPont = (currentPos - startPos * coshf(dis)) / sinhf(dis);
             m1 = startPos * coshf(dis / 4.0f) + vPont * sinhf(dis / 4.0f);
             m2 = startPos * coshf((3.0f * dis) / 4.0f) + vPont * sinhf((dis * 3.0f) / 4.0f);
-            printf("m1 trans = %f\n",m1.x);
+            //printf("m1 trans = %f\n",m1.x);
             graph->TransformPosition();
 
 
